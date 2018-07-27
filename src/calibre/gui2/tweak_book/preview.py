@@ -7,7 +7,6 @@
 # live css
 # check that clicking on both internal and external links works
 # check if you can remove the restriction that prevents inspector dock from being undocked
-# check the context menu
 # check syncing of position back and forth
 # check all buttons in preview panel
 # rewrite JS from coffeescript to rapydscript
@@ -395,17 +394,18 @@ class WebView(QWebEngineView):
 
     def contextMenuEvent(self, ev):
         menu = QMenu(self)
-        p = self._page
-        mf = p.mainFrame()
-        r = mf.hitTestContent(ev.pos())
-        url = unicode(r.linkUrl().toString(NO_URL_FORMATTING)).strip()
-        ca = self.pageAction(QWebEnginePage.Copy)
-        if ca.isEnabled():
-            menu.addAction(ca)
+        data = self._page.contextMenuData()
+        url = data.linkUrl()
+        url = unicode(url.toString(NO_URL_FORMATTING)).strip()
+        text = data.selectedText()
+        if text:
+            ca = self.pageAction(QWebEnginePage.Copy)
+            if ca.isEnabled():
+                menu.addAction(ca)
         menu.addAction(actions['reload-preview'])
         menu.addAction(QIcon(I('debug.png')), _('Inspect element'), self.inspect)
         if url.partition(':')[0].lower() in {'http', 'https'}:
-            menu.addAction(_('Open link'), partial(open_url, r.linkUrl()))
+            menu.addAction(_('Open link'), partial(open_url, data.linkUrl()))
         menu.exec_(ev.globalPos())
 
 
