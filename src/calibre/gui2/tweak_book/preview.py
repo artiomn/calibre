@@ -5,7 +5,6 @@
 # TODO:
 # live css
 # check that clicking on both internal and external links works
-# check syncing of position back and forth
 # check all buttons in preview panel
 # pass user stylesheet with css for split
 
@@ -21,9 +20,10 @@ from threading import Thread
 from urlparse import urlparse
 
 from PyQt5.Qt import (
-    QApplication, QBuffer, QByteArray, QIcon, QMenu, QSize, QTimer, QToolBar, QUrl,
-    QVBoxLayout, QWidget, pyqtSignal, pyqtSlot
+    QApplication, QBuffer, QByteArray, QFile, QIcon, QMenu, QSize, QTimer, QToolBar, QObject,
+    QUrl, QVBoxLayout, QWidget, pyqtSignal, pyqtSlot
 )
+from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtWebEngineCore import QWebEngineUrlSchemeHandler
 from PyQt5.QtWebEngineWidgets import (
     QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineView
@@ -256,7 +256,7 @@ def insert_scripts(profile, *scripts):
         sc.insert(script)
 
 
-def create_script(name, src, world=QWebEngineScript.ApplicationWorld, injection_point=QWebEngineScript.DocumentCreation, on_subframes=True):
+def create_script(name, src, world=QWebEngineScript.ApplicationWorld, injection_point=QWebEngineScript.DocumentReady, on_subframes=True):
     script = QWebEngineScript()
     script.setSourceCode(src)
     script.setName(name)
@@ -276,8 +276,19 @@ def create_profile():
             from calibre.utils.rapydscript import compile_editor
             compile_editor()
         js = P('editor.js', data=True, allow_user_override=False)
-        js += P('csscolorparser.js', data=True, allow_user_override=False)
-        insert_scripts(ans, create_script('editor.js', js))
+        cparser = P('csscolorparser.js', data=True, allow_user_override=False)
+        qwebchannel_js = QFile(':/qtwebchannel/qwebchannel.js')
+        if not qwebchannel_js.open(QBuffer.ReadOnly):
+            raise RuntimeError(
+                    'Failed to load qwebchannel.js with error: %s' % qwebchannel_js.errorString())
+        qwebchannel_js = bytes(qwebchannel_js.readAll()).decode('utf-8')
+        qwebchannel_js += 'window.QWebChannel = QWebChannel;'
+
+        insert_scripts(ans,
+            create_script('qwebchannel.js', qwebchannel_js),
+            create_script('csscolorparser.js', cparser),
+            create_script('editor.js', js),
+        )
         url_handler = UrlSchemeHandler(ans)
         ans.installUrlSchemeHandler(QByteArray(FAKE_PROTOCOL.encode('ascii')), url_handler)
         s = ans.settings()
@@ -288,15 +299,44 @@ def create_profile():
     return ans
 
 
-class WebPage(QWebEnginePage):
+class Bridge(QObject):
 
     sync_requested = pyqtSignal(object, object, object)
     split_requested = pyqtSignal(object, object)
+    go_to_sourceline_address = pyqtSignal(int, 'QStringList')
+    go_to_anchor = pyqtSignal('QString')
+    set_split_mode = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        QObject.__init__(self, parent)
+
+    @pyqtSlot(str, str, str)
+    def request_sync(self, tag_name, href, sourceline_address):
+        try:
+            self.sync_requested.emit(unicode(tag_name), unicode(href), json.loads(unicode(sourceline_address)))
+        except (TypeError, ValueError, OverflowError, AttributeError):
+            pass
+
+    @pyqtSlot(str, str)
+    def request_split(self, loc, totals):
+        actions['split-in-preview'].setChecked(False)
+        loc, totals = json.loads(unicode(loc)), json.loads(unicode(totals))
+        if not loc or not totals:
+            return error_dialog(self.view(), _('Invalid location'),
+                                _('Cannot split on the body tag'), show=True)
+        self.split_requested.emit(loc, totals)
+
+
+class WebPage(QWebEnginePage):
 
     def __init__(self, parent):
         QWebEnginePage.__init__(self, create_profile(), parent)
         secure_webengine(self, for_viewer=True)
-        # TOD: Implement this
+        self.channel = c = QWebChannel(self)
+        self.bridge = Bridge(self)
+        self.setWebChannel(c, QWebEngineScript.ApplicationWorld)
+        c.registerObject('bridge', self.bridge)
+        # TODO: Implement this
         # css = '[data-in-split-mode="1"] [data-is-block="1"]:hover { cursor: pointer !important; border-top: solid 5px green !important }'
 
     def javaScriptConsoleMessage(self, level, msg, linenumber, source_id):
@@ -310,25 +350,8 @@ class WebPage(QWebEnginePage):
         open_url(url)
         return False
 
-    @pyqtSlot(str, str, str)
-    def request_sync(self, tag_name, href, sourceline_address):
-        try:
-            self.sync_requested.emit(unicode(tag_name), unicode(href), json.loads(unicode(sourceline_address)))
-        except (TypeError, ValueError, OverflowError, AttributeError):
-            pass
-
-    def go_to_anchor(self, anchor, lnum):
-        self.runjs('window.calibre_preview_integration.go_to_anchor(%s, %s)' % (
-            json.dumps(anchor), json.dumps(str(lnum))))
-
-    @pyqtSlot(str, str)
-    def request_split(self, loc, totals):
-        actions['split-in-preview'].setChecked(False)
-        loc, totals = json.loads(unicode(loc)), json.loads(unicode(totals))
-        if not loc or not totals:
-            return error_dialog(self.view(), _('Invalid location'),
-                                _('Cannot split on the body tag'), show=True)
-        self.split_requested.emit(loc, totals)
+    def go_to_anchor(self, anchor):
+        self.bridge.go_to_anchor.emit(anchor or '')
 
     def runjs(self, src, callback=None):
         if callback is None:
@@ -341,12 +364,10 @@ class WebPage(QWebEnginePage):
         if lnum is None:
             return
         tags = [x.lower() for x in tags]
-        self.runjs('window.calibre_preview_integration.go_to_sourceline_address(%d, %s)' % (lnum, json.dumps(tags)))
+        self.bridge.go_to_sourceline_address.emit(lnum, tags)
 
     def split_mode(self, enabled):
-        self.runjs(
-            'window.calibre_preview_integration.split_mode(%s)' % (
-                'true' if enabled else 'false'))
+        self.bridge.set_split_mode.emit(1 if enabled else 0)
 
 
 class WebView(QWebEngineView):
@@ -424,8 +445,8 @@ class Preview(QWidget):
         self.setLayout(l)
         l.setContentsMargins(0, 0, 0, 0)
         self.view = WebView(self)
-        self.view._page.sync_requested.connect(self.request_sync)
-        self.view._page.split_requested.connect(self.request_split)
+        self.view._page.bridge.sync_requested.connect(self.request_sync)
+        self.view._page.bridge.split_requested.connect(self.request_split)
         self.view._page.loadFinished.connect(self.load_finished)
         self.inspector = self.view.inspector
         l.addWidget(self.view)
@@ -499,7 +520,7 @@ class Preview(QWidget):
                 else:
                     name = c.href_to_name(href, self.current_name) if href else None
                 if name == self.current_name:
-                    return self.view._page.go_to_anchor(urlparse(href).fragment, lnum)
+                    return self.view._page.go_to_anchor(urlparse(href).fragment)
                 if name and c.exists(name) and c.mime_map[name] in OEB_DOCS:
                     return self.link_clicked.emit(name, urlparse(href).fragment or TOP)
             self.sync_requested.emit(self.current_name, lnum)
