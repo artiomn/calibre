@@ -3,10 +3,8 @@
 # License: GPLv3 Copyright: 2015, Kovid Goyal <kovid at kovidgoyal.net>
 
 # TODO:
-# inspect element
 # live css
 # check that clicking on both internal and external links works
-# check if you can remove the restriction that prevents inspector dock from being undocked
 # check syncing of position back and forth
 # check all buttons in preview panel
 # pass user stylesheet with css for split
@@ -359,6 +357,7 @@ class WebView(QWebEngineView):
         w = QApplication.instance().desktop().availableGeometry(self).width()
         self._size_hint = QSize(int(w/3), int(w/2))
         self._page = WebPage(self)
+        self._page.setDevToolsPage(self.inspector.page())
         self.setPage(self._page)
         self.clear()
         self.setAcceptDrops(False)
@@ -389,10 +388,9 @@ class WebView(QWebEngineView):
             '''))
 
     def inspect(self):
-        raise NotImplementedError('TODO: Implement this')
-        # self.inspector.parent().show()
-        # self.inspector.parent().raise_()
-        # self.pageAction(self.page().InspectElement).trigger()
+        self.inspector.parent().show()
+        self.inspector.parent().raise_()
+        self.pageAction(QWebEnginePage.InspectElement).trigger()
 
     def contextMenuEvent(self, ev):
         menu = QMenu(self)
