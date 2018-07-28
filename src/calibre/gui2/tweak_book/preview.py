@@ -2,10 +2,6 @@
 # vim:fileencoding=utf-8
 # License: GPLv3 Copyright: 2015, Kovid Goyal <kovid at kovidgoyal.net>
 
-# TODO:
-# live css
-# check that clicking on both internal and external links works
-
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import textwrap
@@ -489,6 +485,9 @@ class Preview(QWidget):
     def find_prev(self):
         self.find('prev')
 
+    def go_to_anchor(self, anchor):
+        self.view._page.go_to_anchor(anchor)
+
     def request_sync(self, tagname, href, lnum):
         if self.current_name:
             c = current_container()
@@ -498,7 +497,7 @@ class Preview(QWidget):
                 else:
                     name = c.href_to_name(href, self.current_name) if href else None
                 if name == self.current_name:
-                    return self.view._page.go_to_anchor(urlparse(href).fragment)
+                    return self.go_to_anchor(urlparse(href).fragment)
                 if name and c.exists(name) and c.mime_map[name] in OEB_DOCS:
                     return self.link_clicked.emit(name, urlparse(href).fragment or TOP)
             self.sync_requested.emit(self.current_name, lnum)
