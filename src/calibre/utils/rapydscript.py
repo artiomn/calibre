@@ -14,16 +14,17 @@ import subprocess
 import sys
 from functools import partial
 from io import BytesIO
+from lzma.xz import compress, decompress
 from Queue import Empty, Queue
 from threading import Thread, local
 
 from calibre import force_unicode
-from calibre.constants import __appname__, __version__, cache_dir
+from calibre.constants import (
+    FAKE_HOST, FAKE_PROTOCOL, __appname__, __version__, cache_dir
+)
 from calibre.utils.filenames import atomic_rename
 from calibre.utils.terminal import ANSIStream
 from duktape import Context, JSError, to_python
-from lzma.xz import compress, decompress
-
 
 COMPILER_PATH = 'rapydscript/compiler.js.xz'
 special_title = '__webengine_messages_pending__'
@@ -226,7 +227,10 @@ def compile_viewer():
     rapydscript_dir = os.path.join(base, 'src', 'pyj')
     fname = os.path.join(rapydscript_dir, 'viewer-main.pyj')
     with lopen(fname, 'rb') as f:
-        js = compile_fast(f.read(), fname, js_version=6).replace('__SPECIAL_TITLE__', special_title, 1)
+        js = compile_fast(f.read(), fname, js_version=6).replace(
+            '__SPECIAL_TITLE__', special_title, 1).replace(
+            '__FAKE_PROTOCOL__', FAKE_PROTOCOL, 1).replace(
+            '__FAKE_HOST__', FAKE_HOST, 1)
     base = os.path.join(base, 'resources')
     atomic_write(base, 'viewer.js', js)
 
